@@ -1,0 +1,58 @@
+algorithm: sac
+mode: train
+seed: 42
+warmup_steps: 3000            
+
+# Digital Twin: Physical Dynamics
+physics:
+  target_weight: 750.0
+  tolerance: 10.0
+  dt: 0.01
+  quantization: 10.0
+  coarse_rate: 600.0
+  fine_rate: 60.0
+  sigma_proc: 5.0
+  sigma_meas: 3.0
+  initial_surge_mag: 20.0
+  mu_residual: 15.0
+  sigma_residual: 2.5
+  max_steps: 600
+
+# KF Settings
+kf_logic:
+  q_nominal: [0.5, 36.0, 0.5]
+  q_inflation_factor: 50.0     
+  inflation_window: 10
+  p_init_diag: [10.0, 100.0, 10.0]  
+
+# SAC Hyperparameters
+sac_hyperparameters:
+  episodes: 3000
+  gamma: 0.99
+  lr: 0.0003
+  batch_size: 256
+  tau: 0.005
+  hidden_dim: 256
+  entropy_tuning: true
+
+# Reward Shaping 
+reward_shaping:
+  time_penalty_fast_nominal: -0.05
+  time_penalty_fast_escalated: -5.0 
+  time_penalty_slow: -0.25         
+  success_bonus: 600.0             
+  est_err_lambda: 0.02
+  overflow_penalty_base: -800.0     
+  underflow_penalty: -500.0        
+  chatter_penalty_revert: -50.0    
+  early_switch_hard: -300.0        
+  early_switch_soft: -150.0        
+  speed_bonus_multiplier: 0.5      
+
+# Logging
+logging:
+  checkpoint_every: 100
+  stats_json: "uasac_stats.json"
+  save_model_prefix: "uasac_actor"
+  save_plots: true
+  plot_rolling_window: 100
