@@ -1,9 +1,9 @@
 algorithm: sac
 mode: train
 seed: 42
-warmup_steps: 3000            
+warmup_steps: 50             
 
-# Digital Twin: Physical Dynamics
+# Digital Twin's Physical Dynamics
 physics:
   target_weight: 750.0
   tolerance: 10.0
@@ -19,15 +19,15 @@ physics:
   max_steps: 600
 
 # KF Settings
-kf_logic:
+ekf_logic:
   q_nominal: [0.5, 36.0, 0.5]
-  q_inflation_factor: 50.0     
+  q_inflation_factor: 50.0      
   inflation_window: 10
-  p_init_diag: [10.0, 100.0, 10.0]  
+  p_init_diag: [10.0, 100.0, 10.0] 
 
 # SAC Hyperparameters
 sac_hyperparameters:
-  episodes: 3000
+  episodes: 1500
   gamma: 0.99
   lr: 0.0003
   batch_size: 256
@@ -35,18 +35,17 @@ sac_hyperparameters:
   hidden_dim: 256
   entropy_tuning: true
 
-# Reward Shaping 
 reward_shaping:
   time_penalty_fast_nominal: -0.05
-  time_penalty_fast_escalated: -5.0 
-  time_penalty_slow: -0.25         
+  time_penalty_fast_escalated: -5.0 # penalty if overextending fast fill (>480g)
+  time_penalty_slow: -0.25         # for lazy slow fill 
   success_bonus: 600.0             
   est_err_lambda: 0.02
-  overflow_penalty_base: -800.0     
+  overflow_penalty_base: -800.0    # smooth logarithmic  penalty
   underflow_penalty: -500.0        
   chatter_penalty_revert: -50.0    
-  early_switch_hard: -300.0        
-  early_switch_soft: -150.0        
+  early_switch_hard: -300.0        # penalty for switching before 350g
+  early_switch_soft: -150.0        # penalty for switching between 350g and 450g
   speed_bonus_multiplier: 0.5      
 
 # Logging
