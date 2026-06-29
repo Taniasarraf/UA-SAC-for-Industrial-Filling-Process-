@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from torch.distributions import Normal
 from collections import deque
 
-from UA_SAC_FillingEnv  import FillingEnv
+from UA_SAC_FillingEnv import FillingEnv
 from sac_utils import plot_learning_results, save_summary_json, plot_sac_v_value, plot_loss_convergence
 
 class ReplayBuffer:
@@ -75,8 +75,8 @@ class GuidedSampler:
     def reset(self):
         self.target_switch_weight = np.random.uniform(self.weight_lo, self.weight_hi)
 
-    def act(self, current_kf_weight):
-        if current_kf_weight < self.target_switch_weight:
+    def act(self, current_ekf_weight):
+        if current_ekf_weight < self.target_switch_weight:
             return np.array([0.9], dtype=np.float32)
         else:
             return np.array([-0.9], dtype=np.float32)
@@ -88,7 +88,7 @@ def train():
     seed = config.get('seed', 42)
     torch.manual_seed(seed); np.random.seed(seed); random.seed(seed)
 
-    output_dir = "Outputs_Phase3_UASAC"
+    output_dir = "Outputs_Phase3_UASAC(seed 42)"
     os.makedirs(output_dir, exist_ok=True)
 
     env = FillingEnv()
@@ -97,9 +97,9 @@ def train():
 
     sac_cfg = config['sac_hyperparameters']
     max_steps = config['physics'].get('max_steps', 600)
-    warmup_steps = 3000  
+    warmup_episodes = 50  
 
-    obs_scale = np.array([800.0, 700.0, 2.0, 1000.0, 1000.0, 1000.0, 800.0], dtype=np.float32)
+    obs_scale = np.array([800.0, 700.0, 2.0, 100.0, 300.0, 15.0, 800.0], dtype=np.float32)
 
     actor = SACActor(state_dim, action_dim).to(device)
     q1, q2 = Critic(state_dim, action_dim).to(device), Critic(state_dim, action_dim).to(device)
@@ -112,33 +112,29 @@ def train():
     actor_scheduler = optim.lr_scheduler.StepLR(actor_opt, step_size=1000, gamma=0.5)
     q_scheduler = optim.lr_scheduler.StepLR(q_opt, step_size=1000, gamma=0.5)
 
-    
-    target_entropy = -2.5
+    target_entropy = -float(action_dim)
     log_alpha = torch.zeros(1, requires_grad=True, device=device)
     alpha_opt = optim.Adam([log_alpha], lr=sac_cfg['lr'])
 
     buffer = ReplayBuffer(100000)
     
-    
     history = {k: [] for k in ['success', 'final_weights', 'switch_points', 'overflows', 
                                 'underflows', 'errors', 'mean_nees', 'mean_nis', 
                                 'rewards', 'episode_times']}
                                 
-    
     actor_loss_track = []
     critic_loss_track = []
     
     total_steps = 0
     guided = GuidedSampler(weight_lo=420, weight_hi=480)
-
-    for ep in range(sac_cfg['episodes']):
+    for ep in range(1500):
         state, _ = env.reset()
         state_s = state / obs_scale
         done, ep_reward, step_count = False, 0, 0
         guided.reset()
 
         while not done:
-            if total_steps < warmup_steps:
+            if ep < warmup_episodes:
                 action_np = guided.act(env.x_hat[0, 0])  
             else:
                 state_t = torch.FloatTensor(state_s).unsqueeze(0).to(device)
@@ -155,7 +151,10 @@ def train():
                 reward -= 500.0
                 info["status"] = "Underflow"
 
-            buffer.push(state_s, action_np, reward, next_state_s, done)
+            
+            if info["status"] != "Underflow" or random.random() < 0.1:
+                buffer.push(state_s, action_np, reward, next_state_s, done)
+            
             state_s, ep_reward = next_state_s, ep_reward + reward
             total_steps += 1
 
@@ -171,47 +170,48 @@ def train():
 
                 q_loss = F.mse_loss(q1(s, a), y) + F.mse_loss(q2(s, a), y)
                 q_opt.zero_grad(); q_loss.backward()
-                torch.nn.utils.clip_grad_norm_(list(q1.parameters()) + list(q2.parameters()), 0.5)
+                
+                torch.nn.utils.clip_grad_norm_(list(q1.parameters()) + list(q2.parameters()), 0.1)
                 q_opt.step()
                 critic_loss_track.append(float(q_loss.item()))
 
                 new_a, lp = actor.sample(s)
                 a_loss = (alpha * lp - torch.min(q1(s, new_a), q2(s, new_a))).mean()
                 actor_opt.zero_grad(); a_loss.backward()
-                torch.nn.utils.clip_grad_norm_(actor.parameters(), 0.5)
+                torch.nn.utils.clip_grad_norm_(actor.parameters(), 0.1)
                 actor_opt.step()
                 actor_loss_track.append(float(a_loss.item()))
 
                 alpha_loss = -(log_alpha * (lp + target_entropy).detach()).mean()
                 alpha_opt.zero_grad(); alpha_loss.backward(); alpha_opt.step()
 
-                tau = sac_cfg['tau']
-                for t, p in zip(t_q1.parameters(), q1.parameters()):
-                    t.data.copy_(t.data * (1 - tau) + p.data * tau)
-                for t, p in zip(t_q2.parameters(), q2.parameters()):
-                    t.data.copy_(t.data * (1 - tau) + p.data * tau)
+                
+                if total_steps % 2 == 0:
+                    tau = sac_cfg['tau']
+                    for t, p in zip(t_q1.parameters(), q1.parameters()):
+                        t.data.copy_(t.data * (1 - tau) + p.data * tau)
+                    for t, p in zip(t_q2.parameters(), q2.parameters()):
+                        t.data.copy_(t.data * (1 - tau) + p.data * tau)
 
         actor_scheduler.step()
         q_scheduler.step()
 
         actual_switch = env.switch_weight if env.switch_weight is not None else 0.0
+        current_ep_nees = info.get('mean_nees', 0.0)
+        current_ep_nis  = info.get('mean_nis', 0.0)
+
         history['success'].append(1 if info['status'] == "Success" else 0)
         history['final_weights'].append(info['true_weight'])
         history['switch_points'].append(actual_switch)
         history['overflows'].append(1 if info['status'] == "Overflow" else 0)
         history['underflows'].append(1 if info['status'] == "Underflow" else 0)
         history['errors'].append(abs(750.0 - info['true_weight']))
-        history['mean_nees'].append(info.get('mean_nees', 0.0))
-        history['mean_nis'].append(info.get('mean_nis', 0.0))
+        history['mean_nees'].append(current_ep_nees)
+        history['mean_nis'].append(current_ep_nis)
         history['rewards'].append(ep_reward)
         history['episode_times'].append(step_count)
 
-        print(f"Episode: {ep+1:04d} | "
-              f"Weight: {info['true_weight']:.1f}g | "
-              f"Status: {info['status']:<9} | "
-              f"Switch: {actual_switch:>5.1f}g | "
-              f"Reward: {ep_reward:>7.1f} | "
-              f"Steps: {step_count:>4d}")
+        print(f"Episode: {ep+1:04d} | Weight: {info['true_weight']:.1f}g | Status: {info['status']:<9} | Switch: {actual_switch:>5.1f}g | Reward: {ep_reward:>7.1f} | NEES: {current_ep_nees:>6.2f} | NIS: {current_ep_nis:>5.2f} | Steps: {step_count:>4d}")
 
         if (ep + 1) % 100 == 0:
             torch.save(actor.state_dict(), os.path.join(output_dir, f"uasac_actor_ep{ep+1}.pth"))
@@ -221,7 +221,6 @@ def train():
             avg_error = np.mean(history['errors'][-100:])
             print(f"--- Ep {ep+1:04d} | Success: {avg_success:.2f} | Error: {avg_error:.2f}g | NEES: {avg_nees:.2f} | NIS: {avg_nis:.2f} ---")
 
-    
     torch.save({
         'switch_points': np.array(history['switch_points']),
         'avg_rewards': np.array(history['rewards']),
