@@ -4,6 +4,7 @@ import random
 import numpy as np
 import torch
 from collections import defaultdict
+import pickle
 
 from MonteCarlo_Baseline_FillingEnv_1V import MCFillingEnv1V
 from mc_utils import save_mc_summary_json, plot_mc_learning_results
@@ -21,6 +22,7 @@ class MacroMonteCarlo1D:
         self.low_bound = 350
         self.high_bound = 650
         self.actions = list(range(self.low_bound, self.high_bound + self.w_step, self.w_step))
+        
         
         self.q_table = defaultdict(lambda: {a: float(cfg['initial_q']) for a in self.actions})
         self.visit_counts = defaultdict(lambda: {a: 0 for a in self.actions})
@@ -41,7 +43,7 @@ class MacroMonteCarlo1D:
         n = self.visit_counts[self.state_key][chosen_action]
         q_old = self.q_table[self.state_key][chosen_action]
         
-        
+        \
         self.q_table[self.state_key][chosen_action] = q_old + (1.0 / n) * (episode_return - q_old)
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
 
@@ -52,7 +54,7 @@ def train():
     seed = config.get('seed', 42)
     random.seed(seed); np.random.seed(seed)
     
-    output_dir = "Outputs_MC_Baseline_1D"
+    output_dir = "Outputs_MC_Baseline_1D(new)"
     os.makedirs(output_dir, exist_ok=True)
     
     env = MCFillingEnv1V()
@@ -69,7 +71,7 @@ def train():
         chosen_threshold = agent.select_action(evaluate=False)
         action_gym = np.array([float(chosen_threshold)], dtype=np.float32)
         
-        
+       
         _, reward, done, _, info = env.step(action_gym)
         
         
@@ -85,8 +87,13 @@ def train():
         history['rewards'].append(reward)
         history['episode_times'].append(env.current_step)
         
+        print(f"MC 1D Ep: {ep+1:04d} | Weight: {info['true_weight']:.1f}g | Status: {info['status']:<9} | Selected Cutoff: {chosen_threshold}g | Reward: {reward:>7.1f}")
+
         if (ep + 1) % 100 == 0:
-            print(f"MC 1D Ep: {ep+1:04d} | Weight: {info['true_weight']:.1f}g | Status: {info['status']:<9} | Selected Cutoff: {chosen_threshold}g | Reward: {reward:>7.1f}")
+            avg_success = np.mean(history['success'][-100:])
+            avg_error = np.mean(history['errors'][-100:])
+            best_action = max(agent.q_table[agent.state_key], key=agent.q_table[agent.state_key].get)
+            print(f"--- Ep {ep+1:04d} | Success: {avg_success:.2f} | Error: {avg_error:.2f}g | Best threshold: {best_action}g | Epsilon: {agent.epsilon:.3f} ---")
             
     torch.save({
         'switch_points': np.array(history['switch_points']),
@@ -99,11 +106,9 @@ def train():
     
     save_mc_summary_json(history, os.path.join(output_dir, "mc_1d_stats.json"))
     plot_mc_learning_results(history, "MC 1-Vector Macro Threshold Baseline", output_dir)
-    save_mc_summary_json(history, os.path.join(output_dir, "mc_1d_stats.json"))
-    plot_mc_learning_results(history, "MC 1-Vector Macro Threshold Baseline", output_dir)
 
+    
    
-    import pickle
     q_table_save_path = os.path.join(output_dir, "mc_1d_qtable.pkl")
     with open(q_table_save_path, "wb") as f:
         pickle.dump(dict(agent.q_table), f)
