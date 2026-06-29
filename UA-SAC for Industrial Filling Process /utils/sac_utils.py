@@ -6,11 +6,11 @@ import torch.nn as nn
 import os
 
 def plot_learning_results(history, title, output_dir, rolling_window=100):
-    
+ 
     n_episodes = len(history['success'])
     window = min(rolling_window, n_episodes)
     
-    
+  
     if 'rewards' in history and len(history['rewards']) > 0:
         plt.figure(figsize=(8, 5))
         plt.plot(history['rewards'], color='darkgreen', alpha=0.3, label='Raw Reward')
@@ -114,7 +114,7 @@ def plot_learning_results(history, title, output_dir, rolling_window=100):
         plt.close()
 
 def plot_loss_convergence(actor_losses, critic_losses, output_dir):
-    
+
     if len(actor_losses) == 0 or len(critic_losses) == 0:
         return
     
@@ -122,7 +122,7 @@ def plot_loss_convergence(actor_losses, critic_losses, output_dir):
     plt.plot(critic_losses, color='darkred', alpha=0.5, linewidth=0.8, label='Critic Net Error (Loss)')
     plt.plot(actor_losses, color='darkcyan', alpha=0.5, linewidth=0.8, label='Actor Policy Variance (Loss)')
     
-   
+    
     w = min(100, len(actor_losses))
     if len(actor_losses) > w:
         c_smooth = np.convolve(critic_losses, np.ones(w)/w, mode='valid')
@@ -133,7 +133,7 @@ def plot_loss_convergence(actor_losses, critic_losses, output_dir):
     plt.title("Soft Actor-Critic Network Parameter Convergence History")
     plt.xlabel("Optimization Weight Steps")
     plt.ylabel("Calculated Objective Value Error Bounds")
-    plt.yscale('symlog')
+    plt.yscale('symlog') 
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
@@ -143,7 +143,7 @@ def plot_loss_convergence(actor_losses, critic_losses, output_dir):
 def save_summary_json(history, filename):
     
     n = len(history['success'])
-    dt_scale = 0.01  
+    dt_scale = 0.01  # 10ms sampling frequency
 
     
     valid_indices = [i for i, s in enumerate(history['switch_points']) if s > 0.0 and i < len(history['episode_times'])]
@@ -152,7 +152,7 @@ def save_summary_json(history, filename):
     successful_switches = [history['switch_points'][i] for i in success_indices]
     all_valid_switches = [history['switch_points'][i] for i in valid_indices]
 
-   
+    
     time_max_sw, time_min_sw, time_optimal_sw = 0.0, 0.0, 0.0
     if success_indices:
         sw_array = np.array(successful_switches)
