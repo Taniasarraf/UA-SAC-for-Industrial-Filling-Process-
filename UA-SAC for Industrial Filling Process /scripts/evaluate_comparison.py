@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
-def load_and_pad_data(file_path, target_episodes=3000):
+def load_and_pad_data(file_path, target_episodes=1500):
     if not os.path.exists(file_path):
         return {
             'rewards': np.zeros(target_episodes), 'success': np.zeros(target_episodes),
@@ -29,7 +29,7 @@ def load_and_pad_data(file_path, target_episodes=3000):
     return {'rewards': rewards, 'success': success, 'switches': switches, 'errors': errors, 'weights': weights}
 
 def generate_unified_plots():
-    target_episodes = 3000
+    target_episodes = 1500
     window = 100
     
     mc_1d = load_and_pad_data("mc_1d_final_data.pth", target_episodes)
@@ -56,7 +56,7 @@ def generate_unified_plots():
         r_smooth = np.convolve(dataset['rewards'], np.ones(window)/window, mode='valid')
         ax_perf.plot(smooth_range, r_smooth, color=color, linestyle=style, linewidth=1.5, label=label)
         
-        
+       
         e_smooth = np.convolve(dataset['errors'], np.ones(window)/window, mode='valid')
         ax_error.plot(smooth_range, e_smooth, color=color, linestyle=style, linewidth=1.5)
         
@@ -69,21 +69,18 @@ def generate_unified_plots():
             ax_control.scatter(np.array(valid_idx[::10])+1, dataset['switches'][valid_idx[::10]], color=color, s=1.5, alpha=0.1)
 
    
-    ax_perf.set_title("Learning Performance")
     ax_perf.set_xlabel("Training Episode")
     ax_perf.set_ylabel("Total Return")
     ax_perf.grid(True, alpha=0.2)
-    ax_perf.legend(loc="lower right", frameon=True, facecolor='white', framealpha=0.9, fontsize=8)
+    ax_perf.legend(loc="lower right", frameon=True, facecolor='white', framealpha=0.9, fontsize=11)
     
    
-    ax_error.set_title("Mean Absolute Error")
     ax_error.set_xlabel("Training Episode")
     ax_error.set_ylabel("Tracking Mass Error (g)")
     ax_error.set_yscale('log')
     ax_error.grid(True, which="both", alpha=0.2)
     
     
-    ax_control.set_title("Switching Point Evolution")
     ax_control.set_xlabel("Training Episode")
     ax_control.set_ylabel("Switching Point Weight (g)")
     ax_control.set_ylim([-10, 760])
@@ -91,7 +88,7 @@ def generate_unified_plots():
     
     plt.tight_layout()
     plt.savefig("unified_training_comparison.png", dpi=300, bbox_inches='tight')
-    
+    print("Clean, compact 1x3 conference figure exported successfully without double lines.")
     plt.show()
 
 if __name__ == "__main__":
