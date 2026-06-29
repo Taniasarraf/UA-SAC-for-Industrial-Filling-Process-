@@ -2,7 +2,7 @@ algorithm: monte_carlo
 mode: train
 seed: 42
 
-# Digital Twin: Physical Dynamics
+# Digital Twin's Physical Dynamics
 physics:
   target_weight: 750.0
   tolerance: 10.0
@@ -19,20 +19,20 @@ physics:
 
 # Monte Carlo Hyperparameters
 mc_hyperparameters:
-  episodes: 3000
+  episodes: 1500
   gamma: 0.99
   initial_q: 0.0
   epsilon_start: 1.0
   epsilon_min: 0.05
   epsilon_decay: 0.998
   
-  # Discretization resolution configuration floors
+  
   state_discretization:
     weight_step: 10      
     velocity_step: 5     
-    error_step: 10       
+    error_step: 10      
 
-# Output Configuration 
+
 logging:
   checkpoint_every: 1
   stats_json: "mc_stats.json"
