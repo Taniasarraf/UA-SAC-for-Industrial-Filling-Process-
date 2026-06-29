@@ -11,7 +11,7 @@ from torch.distributions import Normal
 from collections import deque
 import matplotlib.pyplot as plt
 
-from KF_SAC_FillingEnv  import FillingEnv
+from KF_SAC_FillingEnv import FillingEnv
 from sac_utils import plot_learning_results, save_summary_json, plot_sac_v_value, plot_loss_convergence
 
 class ReplayBuffer:
@@ -60,11 +60,12 @@ class VProxy(nn.Module):
         self.obs_scale = obs_scale
 
     def forward(self, state_raw):
-        state_scaled = state_raw / self.obs_scale
+        state_scaled = np.clip(state_raw / self.obs_scale, -3.0, 3.0)
         device = next(self.q1.parameters()).device
-        dummy_action = torch.full((state_scaled.size(0), 1), -1.0).to(device)
+        state_scaled_t = torch.FloatTensor(state_scaled).to(device)
+        dummy_action = torch.full((state_scaled_t.size(0), 1), -1.0).to(device)
         with torch.no_grad():
-            v = torch.min(self.q1(state_scaled, dummy_action), self.q2(state_scaled, dummy_action))
+            v = torch.min(self.q1(state_scaled_t, dummy_action), self.q2(state_scaled_t, dummy_action))
         return v
 
 class GuidedSampler:
@@ -76,21 +77,20 @@ class GuidedSampler:
     def reset(self):
         self.target_switch_weight = np.random.uniform(self.weight_lo, self.weight_hi)
 
-    def act(self, current_kf_weight):
-        if current_kf_weight < self.target_switch_weight:
+    def act(self, current_ekf_weight):
+        if current_ekf_weight < self.target_switch_weight:
             return np.array([0.9], dtype=np.float32)
         else:
             return np.array([-0.9], dtype=np.float32)
 
 def train():
-    with open("sac_train.yaml", "r") as f:
+    with open("sac_train3.yaml", "r") as f:
         config = yaml.safe_load(f)
 
     seed = config.get('seed', 42)
     torch.manual_seed(seed); np.random.seed(seed); random.seed(seed)
 
-    
-    output_dir = "Outputs_Phase2_KFSAC"
+    output_dir = "Outputs_Phase2_KFSAC(new)"
     os.makedirs(output_dir, exist_ok=True)
 
     env = FillingEnv()
@@ -101,8 +101,9 @@ def train():
 
     sac_cfg = config['sac_hyperparameters']
     max_steps = config['physics'].get('max_steps', 600)
-    warmup_steps = 3000  
+    warmup_episodes = 50  
 
+    
     obs_scale = np.array([800.0, 700.0, 2.0, 800.0], dtype=np.float32)
 
     actor = SACActor(state_dim, action_dim).to(device)
@@ -116,7 +117,7 @@ def train():
     actor_scheduler = optim.lr_scheduler.StepLR(actor_opt, step_size=1000, gamma=0.5)
     q_scheduler = optim.lr_scheduler.StepLR(q_opt, step_size=1000, gamma=0.5)
 
-    target_entropy = -2.5
+    target_entropy = -float(action_dim)  
     log_alpha = torch.zeros(1, requires_grad=True, device=device)
     alpha_opt = optim.Adam([log_alpha], lr=sac_cfg['lr'])
 
@@ -134,12 +135,12 @@ def train():
 
     for ep in range(sac_cfg['episodes']):
         state, _ = env.reset()
-        state_s = state / obs_scale
+        state_s = np.clip(state / obs_scale, -3.0, 3.0)
         done, ep_reward, step_count = False, 0, 0
         guided.reset()
 
         while not done:
-            if total_steps < warmup_steps:
+            if ep < warmup_episodes:
                 action_np = guided.act(env.x_hat[0, 0])  
             else:
                 state_t = torch.FloatTensor(state_s).unsqueeze(0).to(device)
@@ -148,7 +149,7 @@ def train():
                 action_np = action.cpu().numpy()[0]
 
             next_state, reward, done, _, info = env.step(action_np)
-            next_state_s = next_state / obs_scale
+            next_state_s = np.clip(next_state / obs_scale, -3.0, 3.0)
 
             step_count += 1
             if step_count >= max_steps and not done:
@@ -196,14 +197,17 @@ def train():
         q_scheduler.step()
 
         actual_switch = env.switch_weight if env.switch_weight is not None else 0.0
+        current_ep_nees = info.get('mean_nees', 0.0)
+        current_ep_nis  = info.get('mean_nis', 0.0)
+
         history['success'].append(1 if info['status'] == "Success" else 0)
         history['final_weights'].append(info['true_weight'])
         history['switch_points'].append(actual_switch)
         history['overflows'].append(1 if info['status'] == "Overflow" else 0)
         history['underflows'].append(1 if info['status'] == "Underflow" else 0)
         history['errors'].append(abs(750.0 - info['true_weight']))
-        history['mean_nees'].append(info.get('mean_nees', 0.0))
-        history['mean_nis'].append(info.get('mean_nis', 0.0))
+        history['mean_nees'].append(current_ep_nees)
+        history['mean_nis'].append(current_ep_nis)
         history['rewards'].append(ep_reward)
         history['episode_times'].append(step_count)
 
@@ -212,6 +216,8 @@ def train():
               f"Status: {info['status']:<9} | "
               f"Switch: {actual_switch:>5.1f}g | "
               f"Reward: {ep_reward:>7.1f} | "
+              f"NEES: {current_ep_nees:>6.2f} | "
+              f"NIS: {current_ep_nis:>5.2f} | "
               f"Steps: {step_count:>4d}")
 
         if (ep + 1) % 100 == 0:
@@ -238,14 +244,11 @@ def train():
 
     torch.save(actor.state_dict(), os.path.join(output_dir, "kfsac_actor_final.pth"))
     
-    
     v_model = VProxy(q1, q2, log_alpha, obs_scale)
-    
     
     weights = np.linspace(0, 800, 100)
     test_states = [[w, 20.0, 1.0, max(0, 750-w)] for w in weights]
-    test_states_t = torch.FloatTensor(np.array(test_states)).to(device)
-    v_values = v_model(test_states_t).cpu().numpy()
+    v_values = v_model(np.array(test_states)).cpu().numpy()
 
     plt.figure(figsize=(9, 5))
     plt.plot(weights, v_values, label="Expected Value State (V)", color='darkgreen', linewidth=2)
@@ -260,7 +263,7 @@ def train():
     plt.close()
     
     save_summary_json(history, os.path.join(output_dir, "kfsac_stats.json"))
-    plot_learning_results(history, "KF-SAC", output_dir)
+    plot_learning_results(history, "KF-SAC Ablation Analytical Profiles", output_dir)
     plot_loss_convergence(actor_loss_track, critic_loss_track, output_dir)
 
 if __name__ == "__main__":
