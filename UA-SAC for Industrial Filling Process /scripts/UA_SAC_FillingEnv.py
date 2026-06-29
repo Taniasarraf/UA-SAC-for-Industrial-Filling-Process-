@@ -18,14 +18,13 @@ class FillingEnv(gym.Env):
 
         self.H = np.array([[1.0, 0.0, 0.0]])
 
-        
-        self.Q_nominal = np.diag([1.0, 50.0, 1.0])   
+        self.Q_nominal = np.diag([1.0, 1.5, 0.05])
         self.R = (self.sigma_meas**2) + ((self.quantization**2) / 12.0)
         
         self.inflation_counter = 0
         self.inflation_window = 10 
         self.current_episode = 0
-        self.lambda_param = 0.02
+        self.lambda_param = 0.02 
 
         low = np.array([0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0])
         high = np.array([800.0, 700.0, 2.0, 1000.0, 1000.0, 1000.0, 800.0])
@@ -43,8 +42,10 @@ class FillingEnv(gym.Env):
         self.ep_nis, self.ep_nees = [], []
         self.true_alpha = np.random.uniform(0.7, 1.5) 
         self.x_hat = np.array([[0.0], [0.0], [1.0]]) 
-        self.P = np.diag([10.0, 100.0, 10.0])
-        self.switch_weight = None
+        
+        self.P = np.diag([10.0, 2.0, 0.1])
+        self.switch_weight = None 
+        self.switch_step = None 
         return self._get_obs(), {}
 
     def _get_obs(self):
@@ -52,95 +53,77 @@ class FillingEnv(gym.Env):
         dist_to_go = max(0.0, self.target_weight - self.x_hat[0, 0])
         return np.concatenate([self.x_hat.flatten(), p_diag, [dist_to_go]]).astype(np.float32)
 
-    def _record_switch_weight(self, w):
-        if self.switch_weight is None:
-            self.switch_weight = w
-
     def step(self, action):
         u = 1.0 if action[0] > 0.0 else -1.0
-
         is_first_switch  = (self.prev_action ==  1.0 and u == -1.0)
         is_revert_switch = (self.prev_action == -1.0 and u ==  1.0)
 
         early_switch_penalty = 0.0
         if is_first_switch and not self.is_fine:
             sw = float(self.x_hat[0, 0])
-            
-            
-            
-            if sw < 400.0:
-                early_switch_penalty = -0.008 * ((400.0 - sw) ** 2)
-            
+            if sw < 400.0: early_switch_penalty = -0.008 * ((400.0 - sw) ** 2)
             self.is_fine = True
             self.inflation_counter = self.inflation_window
-            self._record_switch_weight(sw)
+            self.switch_step = self.current_step 
+            if self.switch_weight is None: self.switch_weight = sw
 
-        chatter_penalty = 0.0
-        if is_revert_switch:
-            chatter_penalty = -50.0  
-
+        chatter_penalty = -50.0 if is_revert_switch else 0.0
         self.prev_action = u
 
-        
         if self.current_step < 15:
-            Q = self.Q_nominal * 50.0  
+            Q = np.diag([50.0, 250.0, 10.0])
+            R_k = self.R * 10.0
         elif self.inflation_counter > 0:
             Q = self.Q_nominal * 10.0
+            R_k = self.R
             self.inflation_counter -= 1
         else:
             Q = self.Q_nominal
+            R_k = self.R
 
-        u_for_kf = -1.0 if self.is_fine else 1.0
+        m_dot_u = self.fine_rate if self.is_fine else self.coarse_rate
 
-        
-        rate = (self.fine_rate if self.is_fine else self.coarse_rate) + (self.true_alpha * self.sigma_proc * np.random.randn())
+        rate = m_dot_u + (self.true_alpha * self.sigma_proc * np.random.randn())
         surge = 20.0 * np.exp(-self.current_step / 5.0) * np.random.rand() if self.current_step < 15 else 0.0
         self.true_weight += (rate * self.dt) + surge
         z_k = np.round((self.true_weight + self.sigma_meas * np.random.randn()) / self.quantization) * self.quantization
 
-        
-        F_mat = np.array([
-            [1.0, self.dt, 0.5 * u_for_kf * (self.dt**2)],
-            [0.0, 1.0,    u_for_kf * self.dt],
-            [0.0, 0.0,    1.0]
-        ])
+        F_mat = np.array([[1.0, self.dt, m_dot_u * self.dt], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
         x_pred = F_mat @ self.x_hat
         P_pred = F_mat @ self.P @ F_mat.T + Q
-
-        R_k = self.R * 10.0 if self.current_step < 15 else self.R
-
         S_k = self.H @ P_pred @ self.H.T + R_k
         K_k = P_pred @ self.H.T / S_k
         y_k = z_k - self.H @ x_pred
         
         self.ep_nis.append(float(y_k**2 / S_k))
         self.x_hat = x_pred + K_k * y_k
+        
         I_KH = np.eye(3) - K_k @ self.H
         self.P = I_KH @ P_pred @ I_KH.T + K_k * R_k * K_k.T
         self.P = (self.P + self.P.T) / 2.0
+        
+        
+        for i in range(3): self.P[i, i] = max(1e-6, self.P[i, i])
 
         true_x = np.array([[self.true_weight], [rate], [self.true_alpha]])
-        self.ep_nees.append(float((true_x - self.x_hat).T @ np.linalg.inv(self.P) @ (true_x - self.x_hat)))
+        err_x = true_x - self.x_hat
+        
+        P_safe = self.P + np.eye(3) * 1e-6
+        self.ep_nees.append(float(err_x.T @ np.linalg.solve(P_safe, err_x)))
         self.current_step += 1
 
         if not self.is_fine and self.true_weight >= (self.target_weight - self.mu_residual):
             self.true_weight += self.mu_residual
             info = {"true_weight": self.true_weight, "status": "Overflow"}
-            info['mean_nis']  = float(np.mean(self.ep_nis))
-            info['mean_nees'] = float(np.mean(self.ep_nees))
+            info['mean_nis']  = float(np.mean(self.ep_nis[15:])) if len(self.ep_nis) > 15 else float(np.mean(self.ep_nis)) if len(self.ep_nis) > 0 else 0.0
+            info['mean_nees'] = float(np.mean(self.ep_nees[15:])) if len(self.ep_nees) > 15 else float(np.mean(self.ep_nees)) if len(self.ep_nees) > 0 else 0.0
             return self._get_obs(), -1500.0, True, False, info
 
         done = self.is_fine and (self.true_weight >= (self.target_weight - self.mu_residual))
         info = {"true_weight": self.true_weight, "status": "Filling"}
 
-       
-        if self.is_fine:
-            time_cost = -1.50  
-        else:
-            if self.x_hat[0, 0] > 450.0:       
-                time_cost = -5.0  
-            else:
-                time_cost = -0.01  
+        if self.is_fine: time_cost = -1.50
+        else: time_cost = -5.0 if self.x_hat[0, 0] > 450.0 else -0.01
 
         est_err = -self.lambda_param * min(abs(self.true_weight - self.x_hat[0, 0]), 100.0)
         reward = time_cost + est_err + chatter_penalty + early_switch_penalty
@@ -150,25 +133,24 @@ class FillingEnv(gym.Env):
             residual_sigma = self.sigma_residual + max(0.0, (275.0 - slow_fill_distance) / 275.0) * 17.5
             residual_sigma = np.clip(residual_sigma, self.sigma_residual, 20.0)
             residual_fall = self.mu_residual + residual_sigma * np.random.randn()
-
             self.true_weight += residual_fall
             info["true_weight"] = self.true_weight
             self.x_hat[0, 0] = self.true_weight
-            
-            info['mean_nis']  = float(np.mean(self.ep_nis))
-            info['mean_nees'] = float(np.mean(self.ep_nees))
-
-            speed_bonus = max(0.0, (800 - self.current_step) * 0.5)
+            speed_bonus = max(0.0, min((800 - self.current_step) * 0.5, 75.0))
 
             if 740.0 <= self.true_weight <= 760.0:
                 reward += 600.0 + speed_bonus
                 info["status"] = "Success"
             elif self.true_weight > 760.0:
-                error = self.true_weight - 760.0
-                reward += -100.0 * np.log1p(error * 5.0) - 800.0 
+                
+                overflow_penalty = -100.0 * np.log1p((self.true_weight - 760.0) * 5.0) - 800.0
+                reward += np.clip(overflow_penalty, -1000.0, 0.0)
                 info["status"] = "Overflow"
             else:
                 reward -= 500.0
                 info["status"] = "Underflow"
 
+        idx = max(15, (self.switch_step + self.inflation_window) if self.switch_weight else 15)
+        info['mean_nis']  = float(np.mean(self.ep_nis[idx:])) if len(self.ep_nis) > idx else float(np.mean(self.ep_nis))
+        info['mean_nees'] = float(np.mean(self.ep_nees[idx:])) if len(self.ep_nees) > idx else float(np.mean(self.ep_nees))
         return self._get_obs(), reward, done, False, info
