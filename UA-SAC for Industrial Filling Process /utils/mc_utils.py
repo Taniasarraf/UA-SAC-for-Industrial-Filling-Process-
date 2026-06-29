@@ -63,7 +63,7 @@ def plot_mc_learning_results(history, title, output_dir, rolling_window=100):
     plt.savefig(os.path.join(output_dir, "mc_avg_reward.png"), dpi=200)
     plt.close()
 
-    
+   
     plt.figure(figsize=(8, 5))
     success_rate = np.convolve(history['success'], np.ones(window) / window, mode='valid')
     plt.plot(range(window-1, n_episodes), success_rate, color='blue', linewidth=2)
@@ -90,7 +90,7 @@ def plot_mc_learning_results(history, title, output_dir, rolling_window=100):
     plt.savefig(os.path.join(output_dir, "mc_switch_points.png"), dpi=200)
     plt.close()
 
-    
+   
     plt.figure(figsize=(8, 5))
     plt.hist(history['final_weights'], bins=50, color='gold', edgecolor='black', alpha=0.8)
     plt.axvline(x=750, color='r', linewidth=1.5, label='Target Line (750g)')
