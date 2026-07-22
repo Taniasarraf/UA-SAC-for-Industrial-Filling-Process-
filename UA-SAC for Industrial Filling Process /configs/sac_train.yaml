@@ -19,7 +19,7 @@ physics:
   max_steps: 600
 
 # KF Settings
-ekf_logic:
+kf_logic:
   q_nominal: [0.5, 36.0, 0.5]
   q_inflation_factor: 50.0      
   inflation_window: 10
